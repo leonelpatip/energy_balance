@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Carte du Bilan Énergétique de l'Afrique</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+
+  <style>
+    body { margin: 0; font-family: Arial; display: flex; flex-direction: column; }
+    h1 {
+      text-align: center;
+      font-size: 30px;
+      margin: 0;
+      padding: 10px;
+      background: linear-gradient(to right, #2c3e50, #3498db);
+      color: white;
+    }
+    #container {
+      display: flex;
+      width: 100%;
+      height: calc(100vh - 40px);
+    }
+    #map {
+      height: 100%;
+      width: 70%;
+    }
+    #sidebar {
+      width: 30%;
+      padding: 10px;
+      background: #f9f9f9;
+      overflow-y: auto;
+      border-left: 1px solid #ccc;
+    }
+    select {
+      width: 100%;
+      padding: 5px;
+      margin-top: 10px;
+    }
+    .legend {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: white;
+      padding: 10px;
+      font-size: 12px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+      width:80px;
+    }
+    .popup-title {
+      text-align: center;
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+    table.popup-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    table.popup-table td {
+      border: 1px solid #ccc;
+      padding: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>AFRICA ENERGY BALANCE 2023 INTERACTIVE MAP</h1>
+  <div id="container">
+    <div id="map"></div>
+    <div id="sidebar">
+      <label for="countryFilter">Choose the country :</label>
+      <select id="countryFilter" size="10" style="height: 200px; overflow-y: scroll;"></select>
+      <div id="barChart" style="width: 100%; height: 300px;"></div>
+      <div id="pieChart" style="width: 100%; height: 300px;"></div>
+    </div>
+  </div>
+
+  <script src="energy_balancer.js"></script>
+  <script src="energy_africa.js"></script>
+  <script>
+    const map = L.map('map').setView([0, 20], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    function getColor(d) {
+      return d > 100 ? '#800026' :
+             d > 50  ? '#BD0026' :
+             d > 10  ? '#E31A1C' :
+             d > 0   ? '#FC4E2A' :
+             d > -50 ? '#FEB24C' :
+             d > -100 ? '#FFEDA0' : '#C7F0D8';
+    }
+
+    const countryLayers = {}; 
+  
+    const geojsonLayer = L.geoJson(data, {
+      style: function(feature) {
+        return {
+          fillColor: getColor(feature.properties.tx_depend),
+          weight: 1,
+          color: 'white',
+          fillOpacity: 0.7
+        };
+      },
+      onEachFeature: function (feature, layer) {
+        const props = feature.properties;
+        layer.bindPopup(`
+          <div class="popup-title">${props.pays}</div>
+          <table class="popup-table">
+            <tr><td>Approvisionnement</td><td>${props.approv_total} ktep</td></tr>
+            <tr><td>Dépendance</td><td>${props.tx_depend} %</td></tr>
+            <tr><td>Importations</td><td>${props.import}</td></tr>
+            <tr><td>Exportations</td><td>${props.export}</td></tr>
+            <tr><td>Consommation Finale</td><td>${props.conso_final} ktep</td></tr>
+          </table>`);
+
+         countryLayers[props.pays] = layer;
+      }
+    }).addTo(map);
+
+
+    const circleLayer = L.layerGroup();
+    energy.features.forEach(f => {
+      const p = f.properties;
+      const circle = L.circleMarker([p.latitude, p.longitude], {
+        radius: Math.sqrt(p.appov_totale) / 10,
+        color: 'white',
+        fillColor: 'green',
+        fillOpacity: 0.9
+      });
+      circle.addTo(circleLayer);
+    });
+
+    geojsonLayer.addTo(map);
+    circleLayer.addTo(map);
+
+    const baseLayers = {};
+    const overlays = {
+      "Countries Boundary": geojsonLayer,
+      "ATEP (Ktep)": circleLayer
+    };
+    L.control.layers(baseLayers, overlays, { collapsed: false }).addTo(map);
+
+
+
+
+    const legend = L.control({position: 'bottomleft'});
+    legend.onAdd = function () {
+      const div = L.DomUtil.create('div', 'legend');
+      const grades = [-150, -100, -50, 0, 10, 50, 100];
+      div.innerHTML += '<strong>Energy Dependence Rate</strong><br>';
+      for (let i = 0; i < grades.length - 1; i++) {
+        div.innerHTML +=
+          '<i style="background:' + getColor(grades[i + 1]) + '; width: 18px; height: 12px; display:inline-block;"></i> ' +
+          grades[i] + '&ndash;' + grades[i + 1] + '<br>';
+      }
+      return div;
+    };
+    legend.addTo(map);
+
+    // Google Charts
+    google.charts.load('current', {'packages':['corechart']});
+    google.charts.setOnLoadCallback(drawCharts);
+
+    function drawCharts() {
+      const regions = [...new Set(data.features.map(f => f.properties.region))];
+      const regionData = regions.map(r => {
+        const total = data.features
+          .filter(f => f.properties.region === r)
+          .reduce((sum, f) => sum + f.properties.approv_total, 0);
+        return [r, total];
+      });
+
+      const barData = google.visualization.arrayToDataTable([
+        ['Région', 'Approvisionnement'],
+        ...regionData
+      ]);
+
+      const pieData = google.visualization.arrayToDataTable([
+        ['Région', 'Part'],
+        ...regionData
+      ]);
+
+      const barOptions = {
+        title: 'Total Primary Energy Supply per Region',
+        legend: { position: 'none' },
+        height: 300,
+        hAxis: { textStyle: { fontSize: 10 } }
+      };
+
+      const pieOptions = {
+        title: 'Total Primary Energy Supply per Region',
+        height: 300
+      };
+
+      const barChart = new google.visualization.ColumnChart(document.getElementById('barChart'));
+      const pieChart = new google.visualization.PieChart(document.getElementById('pieChart'));
+
+      barChart.draw(barData, barOptions);
+      pieChart.draw(pieData, pieOptions);
+    }
+
+
+    const countryFilter = document.getElementById('countryFilter');
+    
+
+    data.features.forEach(f => {
+      const option = document.createElement('option');
+      option.value = f.properties.pays;
+      option.text = f.properties.pays;
+      countryFilter.appendChild(option);
+    });
+
+    countryFilter.addEventListener('change', () => {
+      const selected = countryFilter.value;
+      const layer = countryLayers[selected];
+      if (layer) {
+        map.fitBounds(layer.getBounds());
+        layer.openPopup();
+      }
+    });
+   
+  </script>
+</body>
+</html>
